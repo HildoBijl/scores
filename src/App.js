@@ -36,20 +36,60 @@ export default App
 // It will be really hard...
 
 
-
-// const scores = [ // The number of points which teams have scored against each other. (The diagonal is ignored.)
-//   [0, 0],
-//   [1, 0],
-// ]
-// const priors = [0, 0] // The prior strength averages.
-
-const scores = [ // The number of points which teams have scored against each other. (The diagonal is ignored.)
-  [0, 4, 2],
-  [1, 0, 3],
-  [3, 1, 0],
+const games = [
+  {
+    team1: "UP",
+    team2: "FE",
+    points1: 1,
+    points2: 0,
+  },
 ]
-const priors = [0.2, 0.05, -0.1] // The prior strength averages.
 
-const e = scoresToExpression(scores, priors)
+const priors = {
+  UP: 0,
+  FE: 0,
+}
+
+// const games = [
+//   {
+//     team1: "UP",
+//     team2: "FE",
+//     points1: 4,
+//     points2: 1,
+//   },
+//   {
+//     team1: "UP",
+//     team2: "GD",
+//     points1: 2,
+//     points2: 3,
+//   },
+//   {
+//     team1: "FE",
+//     team2: "GD",
+//     points1: 3,
+//     points2: 1,
+//   },
+// ]
+
+// const priors = {
+//   UP: 0.2,
+//   FE: 0.05,
+//   GD: -0.1,
+// }
+
+console.log('Setting up first expression')
+const e = scoresToExpression(games, priors)
 e.print()
-e.solveIntegrals()
+console.log('Simplifying the expression')
+e.simplify()
+e.print()
+console.log('Applying PFE over [UP]')
+e.applyPFE('UP')
+e.print()
+// console.log('Integrating over [UP]')
+// e.integrateOver('UP')
+// e.print()
+
+// e.findFirstChildOfType('integral').findFirstChildOfType('integral').findFirstChildOfType('integral').solveIntegrals(true)
+// TODO: REINSTATE.
+// e.solveIntegrals()
