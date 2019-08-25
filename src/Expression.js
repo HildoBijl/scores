@@ -276,6 +276,19 @@ export default class Expression {
 				// First simplify the individual terms.
 				this.terms.forEach(term => term.simplify())
 
+				// If there's only one term, become that term.
+				if (this.terms.length === 1)
+					return this.become(this.terms[0])
+
+				// Special case: is the product "-1 * x" or "x * -1" for some parameter x? Then reduce it to "-x".
+				if (this.terms.length === 2) {
+					if (this.terms[0].type === 'number' && this.terms[0].number === -1 && this.terms[1].type === 'parameter') {
+						return this.become(new Expression('parameter', { parameter: this.terms[1].parameter, positive: !this.terms[1].positive }))
+					} else if (this.terms[1].type === 'number' && this.terms[1].number === -1 && this.terms[0].type === 'parameter') {
+						return this.become(new Expression('parameter', { parameter: this.terms[0].parameter, positive: !this.terms[0].positive }))
+					}
+				}
+
 				// If there are products inside the product, then that's pointless. Expand it.
 				newTerms = []
 				this.terms.forEach(term => {
@@ -327,10 +340,10 @@ export default class Expression {
 					newTerms.push(new Expression('exponent', {
 						base: new Expression('parameter', parameter),
 						power: parameterPowers[parameter],
-					}))
+					}).simplify())
 				})
 
-				// TODO: Merge all more complicated terms together.
+				// TODO: Merge all more complicated terms together. Use the "equals" expression. It also allows to simplify the above.
 
 				// Incorporate all non-incorporated terms. We don't want to lose anything.
 				this.terms.forEach((term, i) => {
@@ -394,42 +407,79 @@ export default class Expression {
 				// First simplify the individual terms.
 				this.terms.forEach(term => term.simplify())
 
+				// If there's only one term, become that term.
+				if (this.terms.length === 1)
+					return this.become(this.terms[0])
+
 				// If there are sums inside the sum, then that's pointless. Expand it.
 				newTerms = []
 				this.terms.forEach(term => {
 					if (term.type === 'sum')
-						newTerms.push(...term)
+						newTerms.push(...term.terms)
 					else
 						newTerms.push(term)
 				})
 				this.terms = newTerms
 
-				// Check if there are terms in the sum with a denominator (that is, a term with a negative exponent).
-				// ToDo: if there is a term in the sum with a negative power, merge the fractions.
-				// TODO NEXT: CONTINUE HERE.
-				console.log('ToDo: if there is a sum where terms have negative exponents, merge them all together in one big fraction. Figure out how to efficiently check what needs to be added, expand brackets and such.')
+				// Check if there are terms in the sum with a denominator (that is, a term with a negative exponent). If so, turn the sum into one big fraction instead.
+				this.simplifySumOfFractions()
+				if (this.type !== 'sum') // Did this change the expression into something other than a sum? Then stop simplifying the sum further.
+					return
 
-				// Next, simplify the sum.
-				newTerms = [] // We will put all the resulting terms in here.
-				incorporated = this.terms.map(term => false) // An array to check if we have incorporated all the terms.
-
-				// First we gather all the constant factors.
+				// Next, simplify the sum. We walk through all the terms, like 3*x^2*y + 2*x^2*y + 4*y, check for duplicate terms (like x^2*y) and add up their coefficients.
 				let sum = 0
-				this.terms.forEach((term, i) => {
-					if (term.type === 'number') {
-						sum += term.number
-						incorporated[i] = true
+				const termTracker = []
+				this.terms.forEach(term => {
+					let coefficient, actualTerm // We will gather the coefficient for this expression and the actual term that we have without the coefficient. So if we have 3*x^2*y, then the coefficient is 3 and the actual term is x^2*y.
+					switch (term.type) {
+						case 'number':
+							sum += term.number
+							return
+
+						case 'product':
+							if (term.terms[0].type === 'number') {
+								coefficient = term.terms[0].number
+								actualTerm = new Expression('product', term.terms.slice(1)).simplify()
+							} else {
+								coefficient = 1
+								actualTerm = term
+							}
+							break
+
+						default:
+							coefficient = 1
+							actualTerm = term
+					}
+
+					// If we have a negative parameter, flip the coefficient.
+					if (actualTerm.type === 'parameter' && !actualTerm.positive) {
+						coefficient = -coefficient
+						actualTerm.positive = true
+					}
+
+					// Have we already had this term?
+					const index = termTracker.findIndex(termTrackerItem => termTrackerItem.term.equals(actualTerm))
+					if (index === -1) {
+						termTracker.push({
+							term: actualTerm,
+							coefficient: coefficient,
+						})
+					} else {
+						termTracker[index].coefficient += coefficient
 					}
 				})
+				// Use the results to set up a new terms array.
+				newTerms = [] // We will put all the resulting terms in here.
 				if (sum !== 0)
 					newTerms.push(new Expression('number', sum))
-
-				// Finally, incorporate all non-incorporated terms.
-				this.terms.forEach((term, i) => {
-					if (!incorporated[i])
-						newTerms.push(term)
+				termTracker.forEach(termTrackerItem => {
+					if (termTrackerItem.coefficient === 0)
+						return
+					if (termTrackerItem.coefficient === 1)
+						newTerms.push(termTrackerItem.term)
+					else
+						newTerms.push(new Expression('product', [new Expression('number', termTrackerItem.coefficient), termTrackerItem.term]).simplify())
 				})
-
 				// Turn the final result into a sum.
 				if (newTerms.length === 0)
 					this.become(new Expression('number', 0))
@@ -465,12 +515,120 @@ export default class Expression {
 				// Nothing more can be done.
 				break
 
+				case 'ln':
+					// First simplify the contents.
+					this.contents.simplify()
+
+					// If the contents equal 1, then this becomes a whole lot easier.
+					if (this.contents.type === 'number' && this.contents.number === 1)
+						this.become(new Expression('number', 0))
+
+					// ToDo: consider merging ln's?
+					break
+
 			default:
 				break
 		}
 
 		// Return itself to allow chaining.
 		return this
+	}
+
+	simplifySumOfFractions() {
+		// First we walk through all the terms to collect denominators.
+		const denominators = []
+		this.terms.forEach(term => {
+			switch (term.type) {
+				case 'parameter':
+				case 'number':
+					return
+
+				case 'product': // We have a product! Let's find all the negative exponents in them.
+					term.terms.forEach(subTerm => {
+						if (subTerm.type !== 'exponent' || subTerm.power >= 0)
+							return
+						const index = denominators.findIndex(denominatorTerm => denominatorTerm.base.equals(subTerm.base)) // Check if the exponent base equals a term we've already encountered.
+						if (index === -1) {
+							denominators.push({
+								base: subTerm.base.clone(),
+								power: subTerm.power,
+							})
+						} else {
+							denominators[index].power = Math.min(denominators[index].power, subTerm.power) // Find the lowest (most negative) power.
+						}
+					})
+					return
+
+				default:
+					throw new Error(`ToDo: set up way of dealing with this scenario.`)
+			}
+		})
+
+		// If there are no denominators, then we don't do anything.
+		if (denominators.length === 0)
+			return
+
+		// Next, we set up the numerator. 
+		const numeratorTerms = []
+		this.terms.forEach(term => {
+			// We extract an array of all terms we need to incorporate.
+			let currentProductTerms
+			switch (term.type) {
+				case 'parameter':
+				case 'number':
+				case 'exponent':
+					currentProductTerms = [term]
+					break
+
+				case 'product':
+					currentProductTerms = term.terms
+					break
+
+				default:
+					throw new Error(`Sum simplifying error: tried to simplify a sum with a term of type "${term.type}". This is not supported (yet).`)
+			}
+
+			// We set up the array of new product terms.
+			const newProductTerms = []
+			const denominatorsUsed = denominators.map(_ => false)
+			currentProductTerms.forEach(productTerm => {
+				// If this is not in the denominator, just add it to the resulting product.
+				if (productTerm.type !== 'exponent' || productTerm.power >= 0)
+					return newProductTerms.push(productTerm)
+
+				// Find the corresponding term in the denominators and compare the power.
+				const index = denominators.findIndex(denominatorTerm => denominatorTerm.base.equals(productTerm.base))
+				const powerDifference = productTerm.power - denominators[index].power
+				if (powerDifference > 0) { // If there should be a term in the denominator x^-5 and this term has x^-3 (or something like that) then add x^2 to the numerator.
+					newProductTerms.push(new Expression('exponent', {
+						base: denominators[index].base.clone(),
+						power: powerDifference,
+					}).simplify())
+				}
+				denominatorsUsed[index] = true // Note that this denominator is taken care of.
+			})
+			denominators.forEach((denominator, index) => {
+				if (denominatorsUsed[index])
+					return
+				newProductTerms.push(new Expression('exponent', {
+					base: denominator.base,
+					power: -denominator.power, // If there is a term x^-5, and so the denominator has x^5, then we should add x^5 for the numerator if this term does not have that denominator term.
+				}))
+			})
+			if (newProductTerms.length === 0) {
+				numeratorTerms.push(new Expression('number', 1))
+			} else if (newProductTerms.length === 1) {
+				numeratorTerms.push(newProductTerms[0])
+			} else {
+				numeratorTerms.push(new Expression('product', newProductTerms).simplify())
+			}
+		})
+		const numerator = new Expression('sum', numeratorTerms).simplify()
+
+		// Now that we have the numerator, we just have to merge it together with the denominator.
+		const productTerms = [numerator]
+		denominators.forEach(denominator => productTerms.push(new Expression('exponent', denominator)))
+		this.become(new Expression('product', productTerms))
 	}
 
 	applyPFE(parameter) {
@@ -517,6 +675,8 @@ export default class Expression {
 					console.log('Taking derivative ... ')
 					productWithoutTerm = productWithoutTerm.getDerivative(parameter)
 					console.log('Derivative is: ' + productWithoutTerm.toString())
+					productWithoutTerm.simplify()
+					console.log('Simplified derivative is: ' + productWithoutTerm.simplify())
 				}
 
 				// Insert the right value for the parameter.
@@ -659,8 +819,128 @@ export default class Expression {
 		return this // Return itself to allow for chaining.
 	}
 
+	// Checks if two terms are equal. It does some basic comparison. For example, "x + 1" will be seen as equal to "1 + x". However, more complicated expressions like "1 + 1/x" and "(x+1)/x" will not be seen as equal, nor will (x^2)^3 and x^6.
+	equals(term, temp = false) {
+		// TODO: REMOVE THIS TEST OUTPUT AND THE ABOVE TEMP PARAMETER.
+		// if (temp === false) {
+		// 	console.log('Checking equality of ' + this.toString() + ' and ' + term.toString() + ': ' + (this.equals(term, true) ? 'equal!' : 'not equal...'))
+		// }
+
+		// Check the types. If they are unequal, then we must have unequal terms.
+		if (this.type !== term.type)
+			return false
+
+		switch (this.type) {
+			case 'number':
+				return this.number === term.number
+
+			case 'parameter':
+				return this.parameter === term.parameter
+
+			case 'sum':
+			case 'product':
+				// If there is a different number of terms, this will fail.
+				if (this.terms.length !== term.terms.length)
+					return false
+
+				// Walk through the terms and try to match them with the terms of the other. Return the result of the match.
+				const taken = term.terms.map(_ => false)
+				return this.terms.reduce((result, subTerm1) => {
+					// If we already missed a term, we might as well stop.
+					if (!result)
+						return result
+
+					// Can we find a (non-taken) term in the second expression that equals the current term in the first expression?
+					const matchingTermIndex = term.terms.findIndex((subTerm2, index2) => !taken[index2] && subTerm2.equals(subTerm1))
+					if (matchingTermIndex === -1) {
+						return false // We didn't find a term. Stop searching.
+					} else {
+						taken[matchingTermIndex] = true
+						return true // So far so good.
+					}
+				}, true)
+
+			case 'exponent':
+				if (this.power !== term.power)
+					return false
+				return this.base.equals(term.base)
+
+			case 'ln':
+				return this.contents.equals(term.contents)
+
+			default:
+				throw new Error(`Expression equals error: tried to compare whether two expressions of type "${this.type}" were equal, but this functionality has not (yet) been implemented.`)
+		}
+	}
+
+	// Return true or false: does the term depend on the parameter?
+	dependsOn(parameter) {
+		switch (this.type) {
+			case 'number':
+				return false
+
+			case 'parameter':
+				return this.parameter === parameter
+
+			case 'sum':
+			case 'product':
+				return this.terms.reduce((result, term) => result || term.dependsOn(parameter), false)
+
+			case 'exponent':
+				return this.base.dependsOn(parameter)
+
+			default:
+				throw new Error(`Expression dependsOn error: the dependsOn function has not been implemented (yet) for expressions of type "${this.type}".`)
+		}
+	}
+
+	// Integrates the given expression with respect to the given parameter, or throws an error if it can't.
 	integrateOver(parameter) {
-		// TODO
+		switch (this.type) {
+			case 'sum': // When we integrate over a sum, we integrate over all the respective terms.
+				this.terms.forEach(term => term.integrateOver(parameter))
+				console.log('Result: ' + this.toString())
+				return this.simplify()
+
+			case 'product': // For a product, we count the number of terms that depend on the given parameter. If it's only one, we can integrate it. Otherwise it's too complicated.
+				const numDependentTerms = this.terms.reduce((sum, term) => sum + (term.dependsOn(parameter) ? 1 : 0), 0)
+				if (numDependentTerms === 0)
+					throw new Error(`Expression integrateOver error: we tried to integrate an expression "${this.toString()}" that did not depend on the given parameter "${parameter}".`)
+				if (numDependentTerms > 1)
+					throw new Error(`Expression integrateOver error: we tried to integrate an expression "${this.toString()}" that had too many dependencies on the given parameter "${parameter}".`)
+
+				// We can integrate it! Let's integrate over only the dependent term, leaving the rest.
+				this.terms.find(term => term.dependsOn(parameter)).integrateOver(parameter)
+				return this.simplify()
+
+			case 'exponent': // For an exponent, we use the default integrating rules. We do immediately insert the bounds (infinity and zero).
+				if (this.power >= 0)
+					throw new Error(`Expression integrateOver error: we tried to integrate an expression "${this.toString()}" but its power was not negative. That is not supported.`)
+
+				// What power do we have?
+				let integratedTerm
+				if (this.power <= -2) {
+					// We have something like "1/(x+c)^3".
+					integratedTerm = new Expression('product', [
+						new Expression('number', -1 / (this.power + 1)), // The minus sign is because we insert the bounds, the infinity bound drops out and the zero bound will get a minus sign added to it.
+						new Expression('exponent', {
+							base: this.base,
+							power: this.power + 1,
+						})
+					])
+				} else {
+					// We have something like 1/(x+c). The power is -1.
+					integratedTerm = new Expression('product', [
+						new Expression('number', -1),
+						new Expression('ln', this.base)
+					])
+				}
+				integratedTerm.substitute(parameter, new Expression('number', 0))
+				return this.become(integratedTerm).simplify()
+
+			default:
+				throw new Error(`Expression integrateOver error: we tried to integrate over an expression of type "${this.type}". This is not supported (yet).`)
+		}
 	}
 
 	// solveIntegrals(verbose = false) {

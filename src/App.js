@@ -86,9 +86,9 @@ e.print()
 console.log('Applying PFE over [UP]')
 e.applyPFE('UP')
 e.print()
-// console.log('Integrating over [UP]')
-// e.integrateOver('UP')
-// e.print()
+console.log('Integrating over [UP]')
+e.integrateOver('UP')
+e.print()
 
 // e.findFirstChildOfType('integral').findFirstChildOfType('integral').findFirstChildOfType('integral').solveIntegrals(true)
 // TODO: REINSTATE.
