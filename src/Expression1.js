@@ -515,16 +515,16 @@ export default class Expression {
 				// Nothing more can be done.
 				break
 
-				case 'ln':
-					// First simplify the contents.
-					this.contents.simplify()
+			case 'ln':
+				// First simplify the contents.
+				this.contents.simplify()
 
-					// If the contents equal 1, then this becomes a whole lot easier.
-					if (this.contents.type === 'number' && this.contents.number === 1)
-						this.become(new Expression('number', 0))
+				// If the contents equal 1, then this becomes a whole lot easier.
+				if (this.contents.type === 'number' && this.contents.number === 1)
+					this.become(new Expression('number', 0))
 
-					// ToDo: consider merging ln's?
-					break
+				// ToDo: consider merging ln's?
+				break
 
 			default:
 				break
